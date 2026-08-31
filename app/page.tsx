@@ -62,8 +62,14 @@ export default function Home() {
     <main className="min-h-screen overflow-hidden">
       {/* Navbar */}
       <nav className="mx-auto flex max-w-6xl items-center justify-between px-6 py-6">
-        <div className="text-xl font-black tracking-tight">
-          Study<span className="text-violet-400">One</span>
+        <div>
+          <div className="text-xl font-black tracking-tight">
+            Study<span className="text-violet-400">One</span>
+          </div>
+
+          <div className="text-[10px] font-semibold uppercase tracking-[0.2em] text-white/40">
+            Learn • Plan • Achieve
+          </div>
         </div>
 
         <div className="hidden items-center gap-8 md:flex">
@@ -212,7 +218,7 @@ export default function Home() {
         </div>
       </section>
 
-      {/* Progress placeholder */}
+      {/* Progress */}
       <section id="progress" className="mx-auto max-w-6xl px-6 pb-24">
         <div className="rounded-3xl border border-white/10 bg-white/[0.035] p-8 text-center">
           <p className="text-sm font-bold text-violet-300">
