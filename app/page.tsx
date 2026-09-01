@@ -24,6 +24,8 @@ export default function Home() {
   const [examDate, setExamDate] = useState("");
   const [subjects, setSubjects] = useState("");
   const [plan, setPlan] = useState<string[]>([]);
+  const [aiQuestion, setAiQuestion] = useState("");
+  const [aiAnswer, setAiAnswer] = useState("");
 
   const subjectList = useMemo(
     () =>
@@ -58,6 +60,14 @@ export default function Home() {
     setPlan(newPlan);
   }
 
+  function askAI() {
+    if (!aiQuestion.trim()) return;
+
+    setAiAnswer(
+      `Demo AI response: Great question! Start by breaking "${aiQuestion}" into smaller topics, learn the concept, and then practice questions. Real AI will be connected in the next step.`
+    );
+  }
+
   return (
     <main className="min-h-screen overflow-hidden">
       {/* Navbar */}
@@ -72,7 +82,7 @@ export default function Home() {
           </div>
         </div>
 
-        <div className="hidden items-center gap-8 md:flex">
+        <div className="hidden items-center gap-7 md:flex">
           <a
             href="#"
             className="text-sm font-semibold text-white/80 hover:text-white"
@@ -92,6 +102,13 @@ export default function Home() {
             className="text-sm font-semibold text-white/60 hover:text-white"
           >
             Features
+          </a>
+
+          <a
+            href="#ai"
+            className="text-sm font-semibold text-white/60 hover:text-white"
+          >
+            AI Assistant
           </a>
 
           <a
@@ -215,6 +232,49 @@ export default function Home() {
               ))}
             </div>
           )}
+        </div>
+      </section>
+
+      {/* AI Assistant */}
+      <section id="ai" className="mx-auto max-w-3xl px-6 pb-28">
+        <div className="rounded-[2rem] border border-violet-400/20 bg-violet-500/[0.06] p-7 shadow-2xl md:p-10">
+          <p className="text-sm font-bold text-violet-300">
+            STUDYONE AI
+          </p>
+
+          <h2 className="mt-2 text-3xl font-black">
+            Ask your study assistant
+          </h2>
+
+          <p className="mt-3 text-white/60">
+            Ask anything about your studies and get instant help.
+          </p>
+
+          <div className="mt-7 flex flex-col gap-3 sm:flex-row">
+            <input
+              value={aiQuestion}
+              onChange={(e) => setAiQuestion(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  askAI();
+                }
+              }}
+              placeholder="Ask StudyOne AI..."
+              className="flex-1 rounded-xl border border-white/10 bg-black/30 px-4 py-3 outline-none focus:border-violet-400"
+            />
+
+            <button
+              onClick={askAI}
+              className="rounded-xl bg-violet-500 px-6 py-3 font-bold hover:bg-violet-400"
+            >
+              Ask
+            </button>
+          </div>
+
+          <div className="mt-5 rounded-xl border border-white/10 bg-black/20 p-4 text-white/60">
+            {aiAnswer ||
+              "👋 Hi! I'm StudyOne AI. Ask me something about your studies."}
+          </div>
         </div>
       </section>
 
