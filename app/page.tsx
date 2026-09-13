@@ -2,304 +2,886 @@
 
 import { useMemo, useState } from "react";
 
-const features = [
-  [
-    "01",
-    "Smart Study Plan",
-    "Turn your exam date and subjects into a clear daily plan.",
-  ],
-  [
-    "02",
-    "Quick Revision",
-    "Keep important topics and last-minute revision in one place.",
-  ],
-  [
-    "03",
-    "Progress Tracking",
-    "See what is done, what is next, and where you need more time.",
-  ],
-];
-
 export default function Home() {
+  // ==========================================
+  // PLANNER
+  // ==========================================
+
+  const [className, setClassName] = useState("Class 10");
+  const [board, setBoard] = useState("MP Board");
   const [examDate, setExamDate] = useState("");
   const [subjects, setSubjects] = useState("");
-  const [plan, setPlan] = useState<string[]>([]);
+  const [studyTime, setStudyTime] = useState("1 hour");
+  const [plan, setPlan] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  // ==========================================
+  // AI ASSISTANT
+  // ==========================================
+
   const [aiQuestion, setAiQuestion] = useState("");
   const [aiAnswer, setAiAnswer] = useState("");
+  const [aiLoading, setAiLoading] = useState(false);
 
-  const subjectList = useMemo(
-    () =>
-      subjects
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean),
-    [subjects]
-  );
+  // ==========================================
+  // PDF NOTES
+  // ==========================================
 
-  function createPlan() {
-    if (!examDate || subjectList.length === 0) return;
+  const [pdfFile, setPdfFile] = useState<File | null>(null);
+  const [pdfLoading, setPdfLoading] = useState(false);
+  const [pdfNotes, setPdfNotes] = useState("");
 
-    const today = new Date();
-    const exam = new Date(examDate);
+  // ==========================================
+  // SUBJECT LIST
+  // ==========================================
 
-    today.setHours(0, 0, 0, 0);
-    exam.setHours(0, 0, 0, 0);
+  const subjectList = useMemo(() => {
+    return subjects
+      .split(",")
+      .map((subject) => subject.trim())
+      .filter(Boolean);
+  }, [subjects]);
 
-    const diffTime = exam.getTime() - today.getTime();
+  // ==========================================
+  // CREATE STUDY PLAN
+  // ==========================================
 
-    const daysLeft = Math.max(
-      1,
-      Math.ceil(diffTime / (1000 * 60 * 60 * 24))
-    );
+  async function createPlan() {
+    if (!examDate) {
+      setPlan("Please select your exam date.");
+      return;
+    }
 
-    const newPlan = subjectList.map((subject, i) => {
-      const day = (i % daysLeft) + 1;
-      return `Day ${day}: Study ${subject}`;
-    });
+    if (subjectList.length === 0) {
+      setPlan("Please enter at least one subject.");
+      return;
+    }
 
-    setPlan(newPlan);
+    setLoading(true);
+    setPlan("");
+
+    const prompt = `
+Create a complete day-by-day study plan for a student.
+
+Student details:
+Class: ${className}
+Board: ${board}
+Exam date: ${examDate}
+Subjects: ${subjectList.join(", ")}
+Available study time per day: ${studyTime}
+
+STRICT RULES:
+- Create an actual day-by-day plan from TODAY until the exact exam date.
+- Do NOT create a reusable 7-day template.
+- Do NOT say "repeat this cycle".
+- Use the actual number of days available.
+- Include all provided subjects.
+- Rotate subjects intelligently.
+- Do not exceed the selected daily study time.
+- Breaks do not count toward study time.
+- Do not invent chapters or topics that the student has not provided.
+- If chapters are not provided, use general study activities such as revision, practice, formulas, definitions and questions.
+- Keep the plan realistic for the student's class and board.
+- As the exam gets closer, increase revision and practice.
+- Include lighter days when appropriate.
+- Do not create an unrealistic full-day timetable.
+- Do not add unnecessary laboratory experiments.
+- Do not change the exam date.
+- Use simple, clear formatting.
+`;
+
+    try {
+      const response = await fetch("/api/ai", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          prompt,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || "Could not create plan.");
+      }
+
+      setPlan(data.answer);
+    } catch (error) {
+      console.error(error);
+      setPlan("Could not create the study plan right now.");
+    } finally {
+      setLoading(false);
+    }
   }
 
-  function askAI() {
-    if (!aiQuestion.trim()) return;
+  // ==========================================
+  // AI ASSISTANT
+  // ==========================================
 
-    setAiAnswer(
-      `Demo AI response: Great question! Start by breaking "${aiQuestion}" into smaller topics, learn the concept, and then practice questions. Real AI will be connected in the next step.`
-    );
+  async function askAI() {
+    if (!aiQuestion.trim()) {
+      setAiAnswer("Please enter a question.");
+      return;
+    }
+
+    setAiLoading(true);
+    setAiAnswer("");
+
+    const prompt = `
+You are StudyOne AI.
+
+Student:
+Class: ${className}
+Board: ${board}
+
+Student question:
+${aiQuestion}
+
+Give a simple and useful answer suitable for the student's class.
+Explain difficult concepts step-by-step.
+Do not invent syllabus information.
+`;
+
+    try {
+      const response = await fetch("/api/ai", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          prompt,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || "AI assistant failed.");
+      }
+
+      setAiAnswer(data.answer);
+    } catch (error) {
+      console.error(error);
+      setAiAnswer("AI Assistant is currently unavailable.");
+    } finally {
+      setAiLoading(false);
+    }
   }
+
+  // ==========================================
+  // PDF FILE SELECT
+  // ==========================================
+
+  function handlePdfChange(
+    event: React.ChangeEvent<HTMLInputElement>
+  ) {
+    const file = event.target.files?.[0];
+
+    if (!file) {
+      return;
+    }
+
+    if (
+      file.type !== "application/pdf" &&
+      !file.name.toLowerCase().endsWith(".pdf")
+    ) {
+      setPdfFile(null);
+      setPdfNotes("Please select a PDF file only.");
+      return;
+    }
+
+    setPdfFile(file);
+    setPdfNotes("");
+  }
+
+  // ==========================================
+  // PDF → NOTES + VISUAL LEARNING
+  // ==========================================
+
+  async function generatePdfNotes() {
+    if (!pdfFile) {
+      setPdfNotes("Please select a chapter PDF first.");
+      return;
+    }
+
+    setPdfLoading(true);
+    setPdfNotes("");
+
+    try {
+      const formData = new FormData();
+
+      formData.append("file", pdfFile);
+
+      formData.append(
+        "prompt",
+        `
+Create exam-focused chapter notes from this PDF.
+
+IMPORTANT:
+Use ONLY information actually present in the PDF.
+Do NOT add outside facts.
+Do NOT invent examples.
+Do NOT invent formulas.
+Do NOT invent dates or names.
+
+Organize the response exactly like this:
+
+# 📚 Chapter Notes
+
+## 1. Chapter Overview
+Give a short overview based only on the PDF.
+
+## 2. Important Concepts
+List the most important concepts from the PDF.
+
+## 3. Important Definitions
+Give important definitions from the PDF.
+
+## 4. Key Points
+Give the most important points for revision.
+
+## 5. Important Facts / Dates / Names
+Only include them if they are present in the PDF.
+
+## 6. Formulas
+Only include formulas actually present in the PDF.
+If there are no formulas, write:
+"No specific formulas found in the provided text."
+
+## 7. Examples
+Only include examples present in the PDF.
+
+## 8. Exam Revision
+Give important exam-oriented points and questions based ONLY on the PDF.
+
+# 🖼️ Visual Learning
+
+After the notes, identify concepts from the PDF where a visual explanation would genuinely help.
+
+For each useful concept, use this format:
+
+### Visual 1: [Concept]
+**Type:** Diagram / 3D Visual / Animation
+**Why useful:** Explain briefly why seeing it would help.
+**What the visual should show:** Describe only information supported by the PDF.
+
+If no visual is useful, write:
+"No visual explanation is necessary for this chapter."
+
+# 🎥 Video Ideas
+
+Suggest short educational video ideas ONLY for concepts found in the PDF.
+
+For each one:
+
+### Video 1: [Concept]
+**Length:** 20-40 seconds
+**Style:** 2D / 3D / Animation
+**Explanation:** Describe what the video should teach using only the PDF content.
+
+If no video is useful, write:
+"No video explanation is necessary."
+
+Remember:
+TEXT NOTES ARE THE PRIMARY LEARNING METHOD.
+Visuals and videos are SECONDARY.
+Do not add unrelated visuals or information.
+        `.trim()
+      );
+
+      const response = await fetch("/api/ai", {
+        method: "POST",
+        body: formData,
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || "Could not generate notes.");
+      }
+
+      setPdfNotes(data.answer);
+    } catch (error) {
+      console.error(error);
+
+      setPdfNotes(
+        "PDF notes could not be generated. Please check the server/API error."
+      );
+    } finally {
+      setPdfLoading(false);
+    }
+  }
+
+  // ==========================================
+  // UI
+  // ==========================================
 
   return (
-    <main className="min-h-screen overflow-hidden">
-      {/* Navbar */}
-      <nav className="mx-auto flex max-w-6xl items-center justify-between px-6 py-6">
-        <div>
-          <div className="text-xl font-black tracking-tight">
-            Study<span className="text-violet-400">One</span>
-          </div>
+    <main
+      style={{
+        minHeight: "100vh",
+        background:
+          "radial-gradient(circle at top, #17122b 0%, #09090b 45%, #050505 100%)",
+        color: "#fff",
+        fontFamily: "Arial, sans-serif",
+      }}
+    >
+      {/* NAVBAR */}
 
-          <div className="text-[10px] font-semibold uppercase tracking-[0.2em] text-white/40">
-            Learn • Plan • Achieve
-          </div>
+      <nav
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          padding: "22px 7%",
+          borderBottom: "1px solid #27272a",
+          position: "sticky",
+          top: 0,
+          background: "rgba(5,5,5,0.85)",
+          backdropFilter: "blur(12px)",
+          zIndex: 10,
+        }}
+      >
+        <div
+          style={{
+            fontSize: "24px",
+            fontWeight: "800",
+          }}
+        >
+          Study<span style={{ color: "#8b5cf6" }}>One</span>
         </div>
 
-        <div className="hidden items-center gap-7 md:flex">
-          <a
-            href="#"
-            className="text-sm font-semibold text-white/80 hover:text-white"
-          >
-            Home
-          </a>
-
-          <a
-            href="#planner"
-            className="text-sm font-semibold text-white/60 hover:text-white"
-          >
+        <div
+          style={{
+            display: "flex",
+            gap: "18px",
+            fontSize: "14px",
+            flexWrap: "wrap",
+          }}
+        >
+          <a href="#planner" style={{ color: "#d4d4d8", textDecoration: "none" }}>
             Planner
           </a>
 
-          <a
-            href="#features"
-            className="text-sm font-semibold text-white/60 hover:text-white"
-          >
-            Features
+          <a href="#pdf-notes" style={{ color: "#d4d4d8", textDecoration: "none" }}>
+            PDF Notes
           </a>
 
-          <a
-            href="#ai"
-            className="text-sm font-semibold text-white/60 hover:text-white"
-          >
+          <a href="#assistant" style={{ color: "#d4d4d8", textDecoration: "none" }}>
             AI Assistant
           </a>
-
-          <a
-            href="#progress"
-            className="text-sm font-semibold text-white/60 hover:text-white"
-          >
-            Progress
-          </a>
         </div>
-
-        <a
-          href="#planner"
-          className="rounded-full bg-violet-500 px-5 py-2 text-sm font-bold transition hover:bg-violet-400"
-        >
-          Try planner →
-        </a>
       </nav>
 
-      {/* Hero */}
-      <section className="relative mx-auto max-w-6xl px-6 pb-24 pt-20 text-center">
-        <div className="absolute left-1/2 top-0 -z-10 h-72 w-72 -translate-x-1/2 rounded-full bg-violet-600/20 blur-3xl" />
+      {/* HERO */}
 
-        <p className="mb-5 text-sm font-bold uppercase tracking-[0.25em] text-violet-300">
-          Study smarter
-        </p>
+      <section
+        style={{
+          padding: "90px 7% 70px",
+          textAlign: "center",
+          maxWidth: "1000px",
+          margin: "auto",
+        }}
+      >
+        <div
+          style={{
+            display: "inline-block",
+            padding: "7px 13px",
+            border: "1px solid #3f3f46",
+            borderRadius: "999px",
+            color: "#a78bfa",
+            fontSize: "12px",
+            letterSpacing: "1px",
+            marginBottom: "20px",
+          }}
+        >
+          AI-POWERED STUDY PLATFORM
+        </div>
 
-        <h1 className="mx-auto max-w-4xl text-5xl font-black leading-[1.05] tracking-tight md:text-7xl">
-          One place to plan your{" "}
-          <span className="text-violet-400">study.</span>
+        <h1
+          style={{
+            fontSize: "clamp(42px, 7vw, 76px)",
+            lineHeight: "1",
+            margin: "0",
+            fontWeight: "900",
+          }}
+        >
+          Study smarter.
+          <br />
+          <span style={{ color: "#8b5cf6" }}>Not harder.</span>
         </h1>
 
-        <p className="mx-auto mt-7 max-w-2xl text-lg leading-8 text-white/60">
-          StudyOne helps students turn a deadline into a simple plan they can
-          actually follow.
-        </p>
-
-        <a
-          href="#planner"
-          className="mt-9 inline-flex rounded-2xl bg-violet-500 px-7 py-4 font-bold shadow-2xl shadow-violet-500/20 transition hover:bg-violet-400"
+        <p
+          style={{
+            color: "#a1a1aa",
+            maxWidth: "650px",
+            margin: "25px auto 0",
+            lineHeight: "1.7",
+            fontSize: "17px",
+          }}
         >
-          Build my plan →
-        </a>
+          Build study plans, turn chapter PDFs into notes, and understand
+          difficult concepts with AI-powered learning.
+        </p>
       </section>
 
-      {/* Features */}
+      {/* FEATURES */}
+
       <section
-        id="features"
-        className="mx-auto grid max-w-6xl gap-4 px-6 pb-24 md:grid-cols-3"
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+          gap: "18px",
+          padding: "0 7% 80px",
+          maxWidth: "1200px",
+          margin: "auto",
+        }}
       >
-        {features.map(([n, title, desc]) => (
+        {[
+          ["🧠", "Smart Study Plan", "Create realistic day-by-day plans."],
+          ["📚", "PDF to Notes", "Turn chapters into exam-focused notes."],
+          ["🖼️", "Visual Learning", "Find concepts that benefit from visuals."],
+          ["🤖", "AI Assistant", "Ask questions and learn faster."],
+        ].map(([icon, title, description]) => (
           <div
-            key={n}
-            className="rounded-3xl border border-white/10 bg-white/[0.035] p-7"
+            key={title}
+            style={{
+              padding: "24px",
+              border: "1px solid #27272a",
+              borderRadius: "18px",
+              background: "rgba(24,24,27,0.7)",
+            }}
           >
-            <div className="mb-10 text-sm font-bold text-violet-300">
-              {n}
+            <div style={{ fontSize: "30px", marginBottom: "12px" }}>
+              {icon}
             </div>
 
-            <h2 className="text-2xl font-bold">{title}</h2>
+            <h3 style={{ margin: "0 0 8px" }}>{title}</h3>
 
-            <p className="mt-3 leading-7 text-white/55">{desc}</p>
+            <p
+              style={{
+                margin: 0,
+                color: "#a1a1aa",
+                lineHeight: "1.5",
+                fontSize: "14px",
+              }}
+            >
+              {description}
+            </p>
           </div>
         ))}
       </section>
 
-      {/* Planner */}
-      <section id="planner" className="mx-auto max-w-3xl px-6 pb-28">
-        <div className="rounded-[2rem] border border-white/10 bg-white/[0.045] p-7 shadow-2xl md:p-10">
-          <p className="text-sm font-bold text-violet-300">
-            SMART PLANNER
-          </p>
+      {/* PLANNER */}
 
-          <h2 className="mt-2 text-3xl font-black">
-            Create your first plan
-          </h2>
-
-          <p className="mt-2 text-white/50">
-            Enter your exam date and subjects to generate your study plan.
-          </p>
-
-          <div className="mt-8 grid gap-5 md:grid-cols-2">
-            <label className="block text-sm font-semibold text-white/70">
-              Exam date
-
-              <input
-                value={examDate}
-                onChange={(e) => setExamDate(e.target.value)}
-                type="date"
-                className="mt-2 w-full rounded-xl border border-white/10 bg-black/30 px-4 py-3 outline-none focus:border-violet-400"
-              />
-            </label>
-
-            <label className="block text-sm font-semibold text-white/70">
-              Subjects
-
-              <input
-                value={subjects}
-                onChange={(e) => setSubjects(e.target.value)}
-                placeholder="Maths, Science, English"
-                className="mt-2 w-full rounded-xl border border-white/10 bg-black/30 px-4 py-3 outline-none focus:border-violet-400"
-              />
-            </label>
+      <section
+        id="planner"
+        style={{
+          padding: "70px 7%",
+          maxWidth: "1000px",
+          margin: "auto",
+        }}
+      >
+        <div style={{ marginBottom: "30px" }}>
+          <div
+            style={{
+              color: "#8b5cf6",
+              fontSize: "12px",
+              fontWeight: "700",
+              letterSpacing: "1px",
+            }}
+          >
+            MVP PLANNER
           </div>
 
-          <button
-            onClick={createPlan}
-            className="mt-6 w-full rounded-xl bg-white px-5 py-3.5 font-bold text-black hover:bg-white/90"
-          >
-            Generate plan
-          </button>
+          <h2 style={{ fontSize: "38px", margin: "8px 0" }}>
+            Build my plan
+          </h2>
 
-          {plan.length > 0 && (
-            <div className="mt-7 space-y-2">
-              {plan.map((item) => (
-                <div
-                  key={item}
-                  className="rounded-xl border border-white/10 bg-black/20 px-4 py-3 text-white/80"
+          <p style={{ color: "#a1a1aa" }}>
+            Tell StudyOne what you need to study.
+          </p>
+        </div>
+
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+            gap: "15px",
+          }}
+        >
+          <select
+            value={className}
+            onChange={(e) => setClassName(e.target.value)}
+            style={inputStyle}
+          >
+            {Array.from({ length: 7 }, (_, i) => `Class ${i + 6}`).map(
+              (item) => (
+                <option key={item}>{item}</option>
+              )
+            )}
+          </select>
+
+          <select
+            value={board}
+            onChange={(e) => setBoard(e.target.value)}
+            style={inputStyle}
+          >
+            <option>MP Board</option>
+            <option>CBSE</option>
+            <option>ICSE</option>
+            <option>Other</option>
+          </select>
+
+          <input
+            type="date"
+            value={examDate}
+            onChange={(e) => setExamDate(e.target.value)}
+            style={inputStyle}
+          />
+
+          <select
+            value={studyTime}
+            onChange={(e) => setStudyTime(e.target.value)}
+            style={inputStyle}
+          >
+            <option>30 minutes</option>
+            <option>1 hour</option>
+            <option>1.5 hours</option>
+            <option>2 hours</option>
+            <option>3 hours</option>
+            <option>4 hours</option>
+          </select>
+        </div>
+
+        <input
+          type="text"
+          placeholder="Subjects: Maths, Science, English..."
+          value={subjects}
+          onChange={(e) => setSubjects(e.target.value)}
+          style={{
+            ...inputStyle,
+            width: "100%",
+            marginTop: "15px",
+            boxSizing: "border-box",
+          }}
+        />
+
+        <button
+          onClick={createPlan}
+          disabled={loading}
+          style={buttonStyle}
+        >
+          {loading ? "Creating plan..." : "Build my plan →"}
+        </button>
+
+        {plan && (
+          <div style={resultStyle}>
+            <h3 style={{ marginTop: 0 }}>📅 Your Study Plan</h3>
+
+            <pre style={preStyle}>{plan}</pre>
+          </div>
+        )}
+      </section>
+
+      {/* PDF NOTES */}
+
+      <section
+        id="pdf-notes"
+        style={{
+          padding: "80px 7%",
+          background: "rgba(139,92,246,0.04)",
+          borderTop: "1px solid #18181b",
+          borderBottom: "1px solid #18181b",
+        }}
+      >
+        <div
+          style={{
+            maxWidth: "1000px",
+            margin: "auto",
+          }}
+        >
+          <div
+            style={{
+              color: "#8b5cf6",
+              fontSize: "12px",
+              fontWeight: "700",
+              letterSpacing: "1px",
+            }}
+          >
+            LEARN FROM YOUR CHAPTER
+          </div>
+
+          <h2
+            style={{
+              fontSize: "38px",
+              margin: "8px 0",
+            }}
+          >
+            📄 PDF → Notes → Visual Learning
+          </h2>
+
+          <p
+            style={{
+              color: "#a1a1aa",
+              lineHeight: "1.6",
+              maxWidth: "700px",
+            }}
+          >
+            Upload one chapter PDF. StudyOne will create text notes first,
+            then identify concepts where a diagram, 3D visual or short
+            animation could make understanding easier.
+          </p>
+
+          <div
+            style={{
+              marginTop: "30px",
+              padding: "28px",
+              border: "1px solid #27272a",
+              borderRadius: "20px",
+              background: "#09090b",
+            }}
+          >
+            <label
+              style={{
+                display: "block",
+                marginBottom: "12px",
+                fontWeight: "700",
+              }}
+            >
+              Choose chapter PDF
+            </label>
+
+            <input
+              type="file"
+              accept="application/pdf,.pdf"
+              onChange={handlePdfChange}
+              style={{
+                width: "100%",
+                color: "#d4d4d8",
+              }}
+            />
+
+            {pdfFile && (
+              <div
+                style={{
+                  marginTop: "15px",
+                  padding: "14px",
+                  borderRadius: "12px",
+                  background: "#18181b",
+                  color: "#d4d4d8",
+                  fontSize: "14px",
+                }}
+              >
+                📄 <strong>{pdfFile.name}</strong>
+                <br />
+                <span style={{ color: "#71717a" }}>
+                  {(pdfFile.size / 1024 / 1024).toFixed(2)} MB
+                </span>
+              </div>
+            )}
+
+            <button
+              onClick={generatePdfNotes}
+              disabled={pdfLoading}
+              style={buttonStyle}
+            >
+              {pdfLoading
+                ? "Reading chapter..."
+                : "Generate Notes + Visuals →"}
+            </button>
+          </div>
+
+          {pdfNotes && (
+            <div
+              style={{
+                marginTop: "25px",
+                padding: "30px",
+                border: "1px solid #27272a",
+                borderRadius: "20px",
+                background: "#09090b",
+                overflowX: "auto",
+              }}
+            >
+              <div
+                style={{
+                  color: "#8b5cf6",
+                  fontSize: "12px",
+                  fontWeight: "700",
+                  letterSpacing: "1px",
+                  marginBottom: "15px",
+                }}
+              >
+                STUDYONE AI OUTPUT
+              </div>
+
+              <pre
+                style={{
+                  ...preStyle,
+                  whiteSpace: "pre-wrap",
+                  wordBreak: "break-word",
+                }}
+              >
+                {pdfNotes}
+              </pre>
+
+              <div
+                style={{
+                  marginTop: "25px",
+                  padding: "18px",
+                  borderRadius: "14px",
+                  border: "1px solid #312e81",
+                  background: "rgba(49,46,129,0.12)",
+                }}
+              >
+                <strong>🧠 Learning flow</strong>
+
+                <p
+                  style={{
+                    color: "#a1a1aa",
+                    marginBottom: 0,
+                    lineHeight: "1.7",
+                  }}
                 >
-                  {item}
-                </div>
-              ))}
+                  📝 Read the text first → 🖼️ understand with a visual when
+                  useful → 🎥 use animation/video for difficult concepts →
+                  ❓ test yourself.
+                </p>
+              </div>
             </div>
           )}
         </div>
       </section>
 
-      {/* AI Assistant */}
-      <section id="ai" className="mx-auto max-w-3xl px-6 pb-28">
-        <div className="rounded-[2rem] border border-violet-400/20 bg-violet-500/[0.06] p-7 shadow-2xl md:p-10">
-          <p className="text-sm font-bold text-violet-300">
-            STUDYONE AI
-          </p>
+      {/* AI ASSISTANT */}
 
-          <h2 className="mt-2 text-3xl font-black">
-            Ask your study assistant
-          </h2>
+      <section
+        id="assistant"
+        style={{
+          padding: "80px 7%",
+          maxWidth: "1000px",
+          margin: "auto",
+        }}
+      >
+        <div
+          style={{
+            color: "#8b5cf6",
+            fontSize: "12px",
+            fontWeight: "700",
+            letterSpacing: "1px",
+          }}
+        >
+          STUDYONE AI
+        </div>
 
-          <p className="mt-3 text-white/60">
-            Ask anything about your studies and get instant help.
-          </p>
+        <h2
+          style={{
+            fontSize: "38px",
+            margin: "8px 0",
+          }}
+        >
+          🤖 Ask anything
+        </h2>
 
-          <div className="mt-7 flex flex-col gap-3 sm:flex-row">
-            <input
-              value={aiQuestion}
-              onChange={(e) => setAiQuestion(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  askAI();
-                }
+        <p style={{ color: "#a1a1aa" }}>
+          Get simple explanations based on your class and board.
+        </p>
+
+        <textarea
+          placeholder="Ask a study question..."
+          value={aiQuestion}
+          onChange={(e) => setAiQuestion(e.target.value)}
+          rows={5}
+          style={{
+            ...inputStyle,
+            width: "100%",
+            boxSizing: "border-box",
+            resize: "vertical",
+            marginTop: "20px",
+          }}
+        />
+
+        <button
+          onClick={askAI}
+          disabled={aiLoading}
+          style={buttonStyle}
+        >
+          {aiLoading ? "Thinking..." : "Ask StudyOne AI →"}
+        </button>
+
+        {aiAnswer && (
+          <div style={resultStyle}>
+            <h3 style={{ marginTop: 0 }}>💡 Answer</h3>
+
+            <pre
+              style={{
+                ...preStyle,
+                whiteSpace: "pre-wrap",
               }}
-              placeholder="Ask StudyOne AI..."
-              className="flex-1 rounded-xl border border-white/10 bg-black/30 px-4 py-3 outline-none focus:border-violet-400"
-            />
-
-            <button
-              onClick={askAI}
-              className="rounded-xl bg-violet-500 px-6 py-3 font-bold hover:bg-violet-400"
             >
-              Ask
-            </button>
+              {aiAnswer}
+            </pre>
           </div>
-
-          <div className="mt-5 rounded-xl border border-white/10 bg-black/20 p-4 text-white/60">
-            {aiAnswer ||
-              "👋 Hi! I'm StudyOne AI. Ask me something about your studies."}
-          </div>
-        </div>
+        )}
       </section>
 
-      {/* Progress */}
-      <section id="progress" className="mx-auto max-w-6xl px-6 pb-24">
-        <div className="rounded-3xl border border-white/10 bg-white/[0.035] p-8 text-center">
-          <p className="text-sm font-bold text-violet-300">
-            PROGRESS
-          </p>
+      {/* FOOTER */}
 
-          <h2 className="mt-2 text-3xl font-black">
-            Your progress, coming next
-          </h2>
-
-          <p className="mx-auto mt-3 max-w-xl leading-7 text-white/50">
-            Track completed subjects, study sessions, and your preparation
-            progress here.
-          </p>
-        </div>
-      </section>
-
-      {/* Footer */}
-      <footer className="border-t border-white/10 px-6 py-8 text-center text-sm text-white/40">
-        © {new Date().getFullYear()} StudyOne.shop
+      <footer
+        style={{
+          padding: "35px 7%",
+          borderTop: "1px solid #27272a",
+          textAlign: "center",
+          color: "#71717a",
+          fontSize: "13px",
+        }}
+      >
+        StudyOne • Learn smarter 📚
       </footer>
     </main>
   );
 }
+
+// ==========================================
+// STYLES
+// ==========================================
+
+const inputStyle: React.CSSProperties = {
+  background: "#18181b",
+  border: "1px solid #3f3f46",
+  borderRadius: "12px",
+  padding: "14px",
+  color: "#fff",
+  outline: "none",
+  fontSize: "14px",
+};
+
+const buttonStyle: React.CSSProperties = {
+  marginTop: "18px",
+  padding: "14px 22px",
+  border: "none",
+  borderRadius: "12px",
+  background: "#8b5cf6",
+  color: "#fff",
+  fontWeight: "800",
+  cursor: "pointer",
+  fontSize: "14px",
+};
+
+const resultStyle: React.CSSProperties = {
+  marginTop: "25px",
+  padding: "25px",
+  border: "1px solid #27272a",
+  borderRadius: "18px",
+  background: "#09090b",
+};
+
+const preStyle: React.CSSProperties = {
+  fontFamily: "Arial, sans-serif",
+  color: "#d4d4d8",
+  lineHeight: "1.7",
+  margin: 0,
+  whiteSpace: "pre-wrap",
+};
