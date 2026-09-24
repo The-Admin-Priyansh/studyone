@@ -537,14 +537,19 @@ ${prompt}
         assistantMessage,
       ]);
     } catch (error) {
-      console.error(error);
+      console.error("StudyOne AI error:", error);
+
+      const errorMessage =
+        error instanceof Error
+          ? error.message
+          : "Unknown AI error.";
 
       setChatMessages((previous) => [
         ...previous,
         {
           role: "assistant",
           content:
-            "I couldn't connect to the AI right now. Please try again.",
+            `❌ AI Error:\n\n${errorMessage}`,
         },
       ]);
     } finally {
