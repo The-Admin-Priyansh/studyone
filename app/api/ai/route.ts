@@ -1,10 +1,15 @@
 import Groq from "groq-sdk";
 import { NextResponse } from "next/server";
-import { PDFParse } from "pdf-parse";
 
-const groq = new Groq({
-  apiKey: process.env.GROQ_API_KEY,
-});
+export const runtime = "nodejs";
+
+const apiKey = process.env.GROQ_API_KEY;
+
+const groq = apiKey
+  ? new Groq({
+      apiKey,
+    })
+  : null;
 
 type QuizQuestion = {
   question: string;
@@ -20,44 +25,94 @@ type RecallQuestion = {
   explanation: string;
 };
 
+function aiUnavailableResponse() {
+  return NextResponse.json(
+    {
+      success: false,
+      error:
+        "GROQ_API_KEY is missing in the server environment.",
+    },
+    { status: 500 }
+  );
+}
+
 export async function POST(request: Request) {
   try {
-    const contentType = request.headers.get("content-type") || "";
+    // =========================================================
+    // CHECK GROQ CONFIG
+    // =========================================================
+
+    if (!groq) {
+      console.error(
+        "StudyOne AI ERROR: GROQ_API_KEY is missing."
+      );
+
+      return aiUnavailableResponse();
+    }
+
+    const contentType =
+      request.headers.get("content-type") || "";
 
     // =========================================================
     // PDF NOTES
     // =========================================================
 
-    if (contentType.includes("multipart/form-data")) {
-      const formData = await request.formData();
+    if (
+      contentType.includes(
+        "multipart/form-data"
+      )
+    ) {
+      /*
+        IMPORTANT:
+        Load pdf-parse only for PDF requests.
+        This prevents normal AI requests from
+        needing pdf-parse.
+      */
+      const { PDFParse } = await import(
+        "pdf-parse"
+      );
 
-      const file = formData.get("file");
-      const prompt = formData.get("prompt");
+      const formData =
+        await request.formData();
+
+      const file =
+        formData.get("file");
+
+      const prompt =
+        formData.get("prompt");
 
       if (!(file instanceof File)) {
         return NextResponse.json(
           {
             success: false,
-            error: "Please upload a PDF file.",
+            error:
+              "Please upload a PDF file.",
           },
           { status: 400 }
         );
       }
 
       if (
-        file.type !== "application/pdf" &&
-        !file.name.toLowerCase().endsWith(".pdf")
+        file.type !==
+          "application/pdf" &&
+        !file.name
+          .toLowerCase()
+          .endsWith(".pdf")
       ) {
         return NextResponse.json(
           {
             success: false,
-            error: "Only PDF files are supported.",
+            error:
+              "Only PDF files are supported.",
           },
           { status: 400 }
         );
       }
 
-      if (file.size > 10 * 1024 * 1024) {
+      if (
+        file.size >
+        10 * 1024 * 1024
+      ) {
         return NextResponse.json(
           {
             success: false,
@@ -68,18 +123,24 @@ export async function POST(request: Request) {
         );
       }
 
-      const arrayBuffer = await file.arrayBuffer();
-      const buffer = Buffer.from(arrayBuffer);
+      const arrayBuffer =
+        await file.arrayBuffer();
 
-      const parser = new PDFParse({
-        data: buffer,
-      });
+      const buffer =
+        Buffer.from(arrayBuffer);
 
-      const parsed = await parser.getText();
+      const parser =
+        new PDFParse({
+          data: buffer,
+        });
+
+      const parsed =
+        await parser.getText();
 
       await parser.destroy();
 
-      const pdfText = parsed.text?.trim();
+      const pdfText =
+        parsed.text?.trim();
 
       if (!pdfText) {
         return NextResponse.json(
@@ -92,16 +153,23 @@ export async function POST(request: Request) {
         );
       }
 
-      // Prevent sending an excessively large prompt to the model.
-      const limitedText = pdfText.slice(0, 50000);
+      /*
+        Limit prompt size so extremely large PDFs
+        don't create huge requests.
+      */
+      const limitedText =
+        pdfText.slice(0, 50000);
 
-      const completion = await groq.chat.completions.create({
-        model: "openai/gpt-oss-20b",
-
-        messages: [
+      const completion =
+        await groq.chat.completions.create(
           {
-            role: "system",
-            content: `
+            model:
+              "openai/gpt-oss-20b",
+
+            messages: [
+              {
+                role: "system",
+                content: `
 You are StudyOne AI, an exam-focused study assistant for school students.
 
 Your job is to convert the provided chapter PDF text into clear and useful study notes.
@@ -124,16 +192,16 @@ IMPORTANT RULES:
 14. If something is unclear or missing, say so instead of guessing.
 15. Do NOT use markdown tables.
 16. Prefer headings, bullets and short sections.
-            `.trim(),
-          },
+                `.trim(),
+              },
 
-          {
-            role: "user",
-            content: `
+              {
+                role: "user",
+                content: `
 ${
   typeof prompt === "string"
     ? prompt
-    : "Create simple, exam-focused notes from this chapter."
+    : "Create simple, exam-focused notes from this PDF."
 }
 
 PDF CONTENT:
@@ -149,13 +217,17 @@ Now create the study notes.
 Remember:
 Use only the information contained in the PDF.
 Do not add outside facts.
-            `.trim(),
-          },
-        ],
-      });
+Do not guess missing information.
+                `.trim(),
+              },
+            ],
+          }
+        );
 
       const answer =
-        completion.choices[0]?.message?.content ||
+        completion.choices[0]
+          ?.message
+          ?.content ||
         "Sorry, I couldn't generate notes from this PDF.";
 
       return NextResponse.json({
@@ -168,49 +240,52 @@ Do not add outside facts.
     // NORMAL JSON REQUEST
     // =========================================================
 
-    const body = await request.json();
+    const body =
+      await request.json();
 
     // =========================================================
     // STUDY SESSION RECALL
     // =========================================================
 
-    if (body?.mode === "recall") {
+    if (
+      body?.mode === "recall"
+    ) {
       const className =
-        typeof body.className === "string"
+        typeof body.className ===
+        "string"
           ? body.className
           : "Class 10";
 
       const board =
-        typeof body.board === "string"
+        typeof body.board ===
+        "string"
           ? body.board
           : "MP Board";
 
       const subject =
-        typeof body.subject === "string"
+        typeof body.subject ===
+        "string"
           ? body.subject.trim()
           : "";
 
       const chapter =
-        typeof body.chapter === "string"
+        typeof body.chapter ===
+        "string"
           ? body.chapter.trim()
-          : "";
-
-      const topic =
-        typeof body.topic === "string"
-          ? body.topic.trim()
           : "";
 
       if (!subject) {
         return NextResponse.json(
           {
             success: false,
-            error: "Please provide a subject.",
+            error:
+              "Please provide the subject studied during the session.",
           },
           { status: 400 }
         );
       }
 
-      if (!chapter && !topic) {
+      if (!chapter) {
         return NextResponse.json(
           {
             success: false,
@@ -222,10 +297,9 @@ Do not add outside facts.
       }
 
       const recallPrompt = `
-Create ONE multiple-choice recall question for a student
-who has just completed a focused study session.
+Create exactly ONE multiple-choice recall question for a student who has just completed a focused study session.
 
-Student details:
+Student:
 
 Class:
 ${className}
@@ -236,34 +310,19 @@ ${board}
 Subject:
 ${subject}
 
-Chapter:
-${chapter || "Not specified"}
+Chapter / Topic:
+${chapter}
 
-Topic:
-${topic || "Not specified"}
+This is a quick memory check after studying.
 
-The question MUST be based only on the subject/chapter/topic
-provided above.
-
-PURPOSE:
-
-This is not a normal random quiz.
-
-This is a quick memory check immediately after studying.
-
-The question should test whether the student remembers
-something important from the studied topic.
-
-RULES:
+IMPORTANT RULES:
 
 - Create exactly 1 question.
-- Exactly 4 options.
-- Exactly ONE correct answer.
-- Suitable for ${className}.
-- Keep it concise.
-- Prefer an important concept, definition, formula, fact,
-  reaction, process or basic application depending on the subject.
-- Do not make the question unnecessarily tricky.
+- Create exactly 4 options.
+- There must be exactly ONE correct answer.
+- The question should test an important thing from the provided subject/chapter/topic.
+- Keep the question suitable for ${className}.
+- Keep the question clear and not unnecessarily tricky.
 - Do not invent a specific textbook chapter name.
 - Do not use markdown.
 - Return ONLY valid JSON.
@@ -282,41 +341,52 @@ Return exactly:
   "explanation": "Short explanation"
 }
 
-Before returning:
+Before returning, check:
 
-- Ensure there is exactly 1 question.
-- Ensure there are exactly 4 options.
-- Ensure answer exactly matches one option.
-- Ensure explanation is short.
+- exactly one question
+- exactly four options
+- answer matches one option exactly
+- explanation is short
       `.trim();
 
-      const completion = await groq.chat.completions.create({
-        model: "openai/gpt-oss-20b",
-
-        messages: [
+      const completion =
+        await groq.chat.completions.create(
           {
-            role: "system",
-            content:
-              "You are StudyOne's strict study-session recall generator. Return valid JSON only.",
-          },
-          {
-            role: "user",
-            content: recallPrompt,
-          },
-        ],
+            model:
+              "openai/gpt-oss-20b",
 
-        temperature: 0.2,
+            messages: [
+              {
+                role: "system",
+                content:
+                  "You are StudyOne's strict study-session recall generator. Return valid JSON only.",
+              },
 
-        response_format: {
-          type: "json_object",
-        },
-      });
+              {
+                role: "user",
+                content:
+                  recallPrompt,
+              },
+            ],
+
+            temperature: 0.2,
+
+            response_format: {
+              type: "json_object",
+            },
+          }
+        );
 
       const rawAnswer =
-        completion.choices[0]?.message?.content?.trim();
+        completion.choices[0]
+          ?.message
+          ?.content
+          ?.trim();
 
-      console.log("RECALL RAW RESPONSE:");
-      console.log(rawAnswer);
+      console.log(
+        "RECALL RAW RESPONSE:",
+        rawAnswer
+      );
 
       if (!rawAnswer) {
         return NextResponse.json(
@@ -332,10 +402,13 @@ Before returning:
       let parsed: unknown;
 
       try {
-        parsed = JSON.parse(rawAnswer);
-      } catch (parseError) {
-        console.error("RECALL JSON PARSE ERROR:");
-        console.error(parseError);
+        parsed =
+          JSON.parse(rawAnswer);
+      } catch (error) {
+        console.error(
+          "RECALL JSON PARSE ERROR:",
+          error
+        );
 
         return NextResponse.json(
           {
@@ -348,7 +421,8 @@ Before returning:
       }
 
       if (
-        typeof parsed !== "object" ||
+        typeof parsed !==
+          "object" ||
         parsed === null
       ) {
         return NextResponse.json(
@@ -365,14 +439,22 @@ Before returning:
         parsed as Partial<RecallQuestion>;
 
       if (
-        typeof recall.question !== "string" ||
-        !Array.isArray(recall.options) ||
-        recall.options.length !== 4 ||
-        !recall.options.every(
-          (option) => typeof option === "string"
+        typeof recall.question !==
+          "string" ||
+        !Array.isArray(
+          recall.options
         ) ||
-        typeof recall.answer !== "string" ||
-        typeof recall.explanation !== "string"
+        recall.options.length !==
+          4 ||
+        !recall.options.every(
+          (option) =>
+            typeof option ===
+            "string"
+        ) ||
+        typeof recall.answer !==
+          "string" ||
+        typeof recall.explanation !==
+          "string"
       ) {
         return NextResponse.json(
           {
@@ -384,7 +466,11 @@ Before returning:
         );
       }
 
-      if (!recall.options.includes(recall.answer)) {
+      if (
+        !recall.options.includes(
+          recall.answer
+        )
+      ) {
         return NextResponse.json(
           {
             success: false,
@@ -398,10 +484,14 @@ Before returning:
       return NextResponse.json({
         success: true,
         question: {
-          question: recall.question,
-          options: recall.options,
-          answer: recall.answer,
-          explanation: recall.explanation,
+          question:
+            recall.question,
+          options:
+            recall.options,
+          answer:
+            recall.answer,
+          explanation:
+            recall.explanation,
         },
       });
     }
@@ -410,62 +500,75 @@ Before returning:
     // AI QUIZ
     // =========================================================
 
-    if (body?.mode === "quiz") {
+    if (
+      body?.mode === "quiz"
+    ) {
       const className =
-        typeof body.className === "string"
+        typeof body.className ===
+        "string"
           ? body.className
           : "Class 10";
 
       const board =
-        typeof body.board === "string"
+        typeof body.board ===
+        "string"
           ? body.board
           : "MP Board";
 
       const subject =
-        typeof body.subject === "string"
+        typeof body.subject ===
+        "string"
           ? body.subject
           : "";
 
       const chapter =
-        typeof body.chapter === "string"
+        typeof body.chapter ===
+        "string"
           ? body.chapter
           : "";
 
       const practiceMistakes =
-        body.practiceMistakes === true;
+        body.practiceMistakes ===
+        true;
 
-      const mistakes = Array.isArray(body.mistakes)
-        ? body.mistakes
-        : [];
+      const mistakes =
+        Array.isArray(
+          body.mistakes
+        )
+          ? body.mistakes
+          : [];
 
       if (!subject.trim()) {
         return NextResponse.json(
           {
             success: false,
-            error: "Please provide a subject.",
+            error:
+              "Please provide a subject.",
           },
           { status: 400 }
         );
       }
 
-      const mistakesText = mistakes
-        .slice(-10)
-        .map(
-          (
-            mistake: {
-              question?: string;
-              yourAnswer?: string;
-              correctAnswer?: string;
-              explanation?: string;
-            },
-            index: number
-          ) => `
-Mistake ${index + 1}:
+      const mistakesText =
+        mistakes
+          .slice(-10)
+          .map(
+            (
+              mistake: {
+                question?: string;
+                yourAnswer?: string;
+                correctAnswer?: string;
+                explanation?: string;
+              },
+              index: number
+            ) =>
+              `
+Mistake ${index + 1}
 
 Question:
 ${mistake.question || ""}
 
-Student's answer:
+Student answer:
 ${mistake.yourAnswer || ""}
 
 Correct answer:
@@ -474,8 +577,8 @@ ${mistake.correctAnswer || ""}
 Explanation:
 ${mistake.explanation || ""}
 `
-        )
-        .join("\n");
+          )
+          .join("\n");
 
       const quizPrompt = `
 Create exactly 5 multiple-choice questions for StudyOne.
@@ -505,13 +608,11 @@ The student previously made these mistakes:
 
 ${mistakesText}
 
-Create NEW questions that test the same concepts
-the student struggled with.
+Create NEW questions that test the same concepts the student struggled with.
 
 Do NOT simply copy the previous questions.
 
-The goal is to help the student understand and improve
-their weak areas.
+The goal is to help the student understand and improve their weak areas.
 `
     : ""
 }
@@ -532,7 +633,7 @@ IMPORTANT RULES:
 - Return ONLY valid JSON.
 - Do not put JSON inside markdown code fences.
 
-Return exactly this structure:
+Return exactly:
 
 {
   "questions": [
@@ -561,33 +662,44 @@ Before returning the JSON, check:
 - Every object has explanation.
       `.trim();
 
-      const completion = await groq.chat.completions.create({
-        model: "openai/gpt-oss-20b",
-
-        messages: [
+      const completion =
+        await groq.chat.completions.create(
           {
-            role: "system",
-            content:
-              "You are StudyOne's strict quiz generator. Return valid JSON only.",
-          },
-          {
-            role: "user",
-            content: quizPrompt,
-          },
-        ],
+            model:
+              "openai/gpt-oss-20b",
 
-        temperature: 0.2,
+            messages: [
+              {
+                role: "system",
+                content:
+                  "You are StudyOne's strict quiz generator. Return valid JSON only.",
+              },
 
-        response_format: {
-          type: "json_object",
-        },
-      });
+              {
+                role: "user",
+                content:
+                  quizPrompt,
+              },
+            ],
+
+            temperature: 0.2,
+
+            response_format: {
+              type: "json_object",
+            },
+          }
+        );
 
       const rawAnswer =
-        completion.choices[0]?.message?.content?.trim();
+        completion.choices[0]
+          ?.message
+          ?.content
+          ?.trim();
 
-      console.log("QUIZ RAW RESPONSE:");
-      console.log(rawAnswer);
+      console.log(
+        "QUIZ RAW RESPONSE:",
+        rawAnswer
+      );
 
       if (!rawAnswer) {
         return NextResponse.json(
@@ -603,12 +715,13 @@ Before returning the JSON, check:
       let parsed: unknown;
 
       try {
-        parsed = JSON.parse(rawAnswer);
-      } catch (parseError) {
-        console.error("QUIZ JSON PARSE ERROR:");
-        console.error(parseError);
-        console.error("RAW AI RESPONSE:");
-        console.error(rawAnswer);
+        parsed =
+          JSON.parse(rawAnswer);
+      } catch (error) {
+        console.error(
+          "QUIZ JSON PARSE ERROR:",
+          error
+        );
 
         return NextResponse.json(
           {
@@ -620,10 +733,12 @@ Before returning the JSON, check:
         );
       }
 
-      let questions: unknown = null;
+      let questions: unknown =
+        null;
 
       if (
-        typeof parsed === "object" &&
+        typeof parsed ===
+          "object" &&
         parsed !== null &&
         "questions" in parsed
       ) {
@@ -634,13 +749,11 @@ Before returning the JSON, check:
         ).questions;
       }
 
-      if (!Array.isArray(questions)) {
-        console.error(
-          "QUIZ QUESTIONS ARE NOT AN ARRAY:"
-        );
-
-        console.error(parsed);
-
+      if (
+        !Array.isArray(
+          questions
+        )
+      ) {
         return NextResponse.json(
           {
             success: false,
@@ -651,10 +764,17 @@ Before returning the JSON, check:
         );
       }
 
-      const validQuestions: QuizQuestion[] = [];
+      const validQuestions: QuizQuestion[] =
+        [];
 
-      for (const item of questions) {
-        if (!item || typeof item !== "object") {
+      for (
+        const item of questions
+      ) {
+        if (
+          !item ||
+          typeof item !==
+            "object"
+        ) {
           continue;
         }
 
@@ -662,14 +782,22 @@ Before returning the JSON, check:
           item as Partial<QuizQuestion>;
 
         if (
-          typeof question.question !== "string" ||
-          !Array.isArray(question.options) ||
-          question.options.length !== 4 ||
-          !question.options.every(
-            (option) => typeof option === "string"
+          typeof question.question !==
+            "string" ||
+          !Array.isArray(
+            question.options
           ) ||
-          typeof question.answer !== "string" ||
-          typeof question.explanation !== "string"
+          question.options.length !==
+            4 ||
+          !question.options.every(
+            (option) =>
+              typeof option ===
+              "string"
+          ) ||
+          typeof question.answer !==
+            "string" ||
+          typeof question.explanation !==
+            "string"
         ) {
           continue;
         }
@@ -683,20 +811,28 @@ Before returning the JSON, check:
         }
 
         validQuestions.push({
-          question: question.question,
-          options: question.options,
-          answer: question.answer,
-          explanation: question.explanation,
+          question:
+            question.question,
+          options:
+            question.options,
+          answer:
+            question.answer,
+          explanation:
+            question.explanation,
         });
       }
 
-      if (validQuestions.length !== 5) {
+      if (
+        validQuestions.length !==
+        5
+      ) {
         console.error(
-          "INVALID QUIZ STRUCTURE:"
-        );
-
-        console.error(
-          JSON.stringify(parsed, null, 2)
+          "INVALID QUIZ STRUCTURE:",
+          JSON.stringify(
+            parsed,
+            null,
+            2
+          )
         );
 
         return NextResponse.json(
@@ -711,7 +847,8 @@ Before returning the JSON, check:
 
       return NextResponse.json({
         success: true,
-        questions: validQuestions,
+        questions:
+          validQuestions,
       });
     }
 
@@ -719,11 +856,13 @@ Before returning the JSON, check:
     // NORMAL AI ASSISTANT / PLANNER
     // =========================================================
 
-    const prompt = body?.prompt;
+    const prompt =
+      body?.prompt;
 
     if (
       !prompt ||
-      typeof prompt !== "string"
+      typeof prompt !==
+        "string"
     ) {
       return NextResponse.json(
         {
@@ -735,13 +874,16 @@ Before returning the JSON, check:
       );
     }
 
-    const completion = await groq.chat.completions.create({
-      model: "openai/gpt-oss-20b",
-
-      messages: [
+    const completion =
+      await groq.chat.completions.create(
         {
-          role: "system",
-          content: `
+          model:
+            "openai/gpt-oss-20b",
+
+          messages: [
+            {
+              role: "system",
+              content: `
 You are StudyOne AI, a helpful study planner and study assistant for school students.
 
 Give simple, practical and well-organized answers.
@@ -762,24 +904,25 @@ Formatting rules:
 - Do NOT use markdown tables.
 - Never output structures like:
   | Time | Activity | Purpose |
-- Instead use headings, bullets, cards-style sections
-  and short paragraphs.
+- Use headings, bullets and short paragraphs instead.
 - Keep answers easy to scan.
 - Use emojis where they improve clarity.
-- Use short sections.
-- Do not over-explain simple questions.
-          `.trim(),
-        },
+- Do not invent facts when the student has not provided enough information.
+              `.trim(),
+            },
 
-        {
-          role: "user",
-          content: prompt,
-        },
-      ],
-    });
+            {
+              role: "user",
+              content: prompt,
+            },
+          ],
+        }
+      );
 
     const answer =
-      completion.choices[0]?.message?.content ||
+      completion.choices[0]
+        ?.message
+        ?.content ||
       "Sorry, I couldn't generate a response.";
 
     return NextResponse.json({
@@ -804,8 +947,11 @@ Formatting rules:
     let errorMessage =
       "Unknown AI service error.";
 
-    if (error instanceof Error) {
-      errorMessage = error.message;
+    if (
+      error instanceof Error
+    ) {
+      errorMessage =
+        error.message;
     }
 
     return NextResponse.json(

@@ -370,11 +370,25 @@ export default function Home() {
         }),
       });
 
-      const data = await response.json();
+      const responseText = await response.text();
+
+let data: any = {};
+
+try {
+  data = responseText
+    ? JSON.parse(responseText)
+    : {};
+} catch {
+  throw new Error(
+    `AI server returned an invalid response (${response.status}).`
+  );
+}
 
       if (!response.ok || !data.success) {
-        throw new Error(data.error || "Recall question failed.");
-      }
+  throw new Error(
+    data.error || "AI request failed."
+  );
+}
 
       setRecallQuestion(data.question);
     } catch (error) {
