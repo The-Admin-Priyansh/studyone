@@ -49,6 +49,13 @@ type ChatMessage = {
   content: string;
 };
 
+type RecallQuestion = {
+  question: string;
+  options: string[];
+  answer: string;
+  explanation: string;
+};
+
 const thoughtMessages = [
   "One chapter at a time. That's enough.",
   "Don't wait for motivation. Start with one question.",
@@ -139,12 +146,24 @@ export default function Home() {
 
   const [quizHistory, setQuizHistory] = useState<QuizHistory[]>([]);
 
-  /* ---------------- FOCUS TIMER ---------------- */
+  /* ---------------- FOCUS SESSION ---------------- */
 
   const [studySeconds, setStudySeconds] = useState(0);
+  const [studyRunning, setStudyRunning] = useState(false);
+  const [studySubject, setStudySubject] = useState("");
+  const [studyChapter, setStudyChapter] = useState("");
+  const [studyCompleted, setStudyCompleted] = useState(false);
   const STUDY_GOAL = 30 * 60;
 
-  const studyUnlocked = studySeconds >= STUDY_GOAL;
+  /* ---------------- SESSION RECALL ---------------- */
+
+  const [recallQuestion, setRecallQuestion] = useState<RecallQuestion | null>(null);
+  const [recallSelected, setRecallSelected] = useState("");
+  const [recallLoading, setRecallLoading] = useState(false);
+  const [recallPassed, setRecallPassed] = useState(false);
+  const [recallExplanation, setRecallExplanation] = useState("");
+
+  const gamesUnlocked = studyCompleted && recallPassed;
 
   /* ---------------- FUN GAMES ---------------- */
 
@@ -176,6 +195,21 @@ export default function Home() {
       const savedStudySeconds = localStorage.getItem(
         "studyone_study_seconds"
       );
+      const savedStudyRunning = localStorage.getItem(
+        "studyone_study_running"
+      );
+      const savedStudySubject = localStorage.getItem(
+        "studyone_study_subject"
+      );
+      const savedStudyChapter = localStorage.getItem(
+        "studyone_study_chapter"
+      );
+      const savedStudyCompleted = localStorage.getItem(
+        "studyone_study_completed"
+      );
+      const savedRecallPassed = localStorage.getItem(
+        "studyone_recall_passed"
+      );
       const savedChat = localStorage.getItem("studyone_chat");
 
       if (savedMistakes) {
@@ -187,7 +221,27 @@ export default function Home() {
       }
 
       if (savedStudySeconds) {
-        setStudySeconds(Number(savedStudySeconds));
+        setStudySeconds(Math.min(STUDY_GOAL, Number(savedStudySeconds)));
+      }
+
+      if (savedStudyRunning === "true") {
+        setStudyRunning(true);
+      }
+
+      if (savedStudySubject) {
+        setStudySubject(savedStudySubject);
+      }
+
+      if (savedStudyChapter) {
+        setStudyChapter(savedStudyChapter);
+      }
+
+      if (savedStudyCompleted === "true") {
+        setStudyCompleted(true);
+      }
+
+      if (savedRecallPassed === "true") {
+        setRecallPassed(true);
       }
 
       if (savedChat) {
@@ -221,19 +275,57 @@ export default function Home() {
 
   useEffect(() => {
     localStorage.setItem(
+      "studyone_study_running",
+      String(studyRunning)
+    );
+  }, [studyRunning]);
+
+  useEffect(() => {
+    localStorage.setItem(
+      "studyone_study_subject",
+      studySubject
+    );
+  }, [studySubject]);
+
+  useEffect(() => {
+    localStorage.setItem(
+      "studyone_study_chapter",
+      studyChapter
+    );
+  }, [studyChapter]);
+
+  useEffect(() => {
+    localStorage.setItem(
+      "studyone_study_completed",
+      String(studyCompleted)
+    );
+  }, [studyCompleted]);
+
+  useEffect(() => {
+    localStorage.setItem(
+      "studyone_recall_passed",
+      String(recallPassed)
+    );
+  }, [recallPassed]);
+
+  useEffect(() => {
+    localStorage.setItem(
       "studyone_chat",
       JSON.stringify(chatMessages)
     );
   }, [chatMessages]);
 
-  /* ---------------- STUDY TIMER ---------------- */
+  /* ---------------- STUDY SESSION TIMER ---------------- */
 
   useEffect(() => {
-    if (studyUnlocked) return;
+    if (!studyRunning || studyCompleted) return;
 
     const timer = setInterval(() => {
       setStudySeconds((previous) => {
-        if (previous >= STUDY_GOAL) {
+        if (previous + 1 >= STUDY_GOAL) {
+          clearInterval(timer);
+          setStudyRunning(false);
+          setStudyCompleted(true);
           return STUDY_GOAL;
         }
 
@@ -242,7 +334,107 @@ export default function Home() {
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [studyUnlocked]);
+  }, [studyRunning, studyCompleted]);
+
+  /* ---------------- SESSION RECALL ---------------- */
+
+  async function generateRecallQuestion() {
+    if (!studySubject.trim()) {
+      setRecallQuestion({
+        question: "What subject did you study in this session?",
+        options: ["Maths", "Science", "English", "Social Science"],
+        answer: studySubject || "Science",
+        explanation: "Start the next session by entering the subject you studied so StudyOne can generate a real recall question."
+      });
+      return;
+    }
+
+    setRecallLoading(true);
+    setRecallQuestion(null);
+    setRecallSelected("");
+    setRecallPassed(false);
+    setRecallExplanation("");
+
+    try {
+      const response = await fetch("/api/ai", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          mode: "recall",
+          className,
+          board,
+          subject: studySubject,
+          chapter: studyChapter,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || "Recall question failed.");
+      }
+
+      setRecallQuestion(data.question);
+    } catch (error) {
+      console.error(error);
+      setRecallExplanation(
+        error instanceof Error
+          ? error.message
+          : "Couldn't create the recall question."
+      );
+    } finally {
+      setRecallLoading(false);
+    }
+  }
+
+  function chooseRecallAnswer(answer: string) {
+    if (!recallQuestion || recallSelected) return;
+
+    setRecallSelected(answer);
+
+    if (answer === recallQuestion.answer) {
+      setRecallPassed(true);
+      setRecallExplanation("Correct! You remembered what you studied. 🎉");
+    } else {
+      setRecallPassed(false);
+      setRecallExplanation(
+        `Not quite. The correct answer is: ${recallQuestion.answer}. ${recallQuestion.explanation}`
+      );
+    }
+  }
+
+  function startStudySession() {
+    if (studyCompleted) return;
+
+    if (!studySubject.trim()) {
+      alert("Enter the subject you are about to study first.");
+      return;
+    }
+
+    setStudyRunning(true);
+  }
+
+  function pauseStudySession() {
+    setStudyRunning(false);
+  }
+
+  function resetStudySession() {
+    const confirmed = window.confirm(
+      "Reset this study session? Your 30-minute progress will be cleared."
+    );
+
+    if (!confirmed) return;
+
+    setStudySeconds(0);
+    setStudyRunning(false);
+    setStudyCompleted(false);
+    setRecallQuestion(null);
+    setRecallSelected("");
+    setRecallPassed(false);
+    setRecallExplanation("");
+  }
 
   /* ---------------- THOUGHT ROTATION ---------------- */
 
@@ -402,6 +594,8 @@ Rules:
 - Include revision and practice.
 - Do not invent specific syllabus topics.
 - Use clear day-by-day sections.
+- Never use markdown tables.
+- Format each day as a heading followed by short bullet points.
 - Keep it easy for a student to follow.
           `.trim(),
         }),
@@ -869,7 +1063,7 @@ Rules:
   /* ---------------- FUN ZONE ---------------- */
 
   function startReactionGame() {
-    if (!studyUnlocked) return;
+    if (!gamesUnlocked) return;
 
     setReactionStarted(true);
     setReactionReady(false);
@@ -1054,7 +1248,7 @@ Rules:
                       isActive ? "nav-item-active" : ""
                     }`}
                     onClick={() => {
-                      if (isFun && !studyUnlocked) {
+                      if (isFun && !gamesUnlocked) {
                         navigate("fun");
                         return;
                       }
@@ -1068,7 +1262,7 @@ Rules:
 
                     <span>{item.label}</span>
 
-                    {isFun && !studyUnlocked && (
+                    {isFun && !gamesUnlocked && (
                       <span className="lock-small">
                         🔒
                       </span>
@@ -1083,9 +1277,9 @@ Rules:
         <div className="sidebar-bottom">
           <div className="mini-focus">
             <div className="mini-focus-top">
-              <span>Focus session</span>
+              <span>Study session</span>
               <span>
-                {studyUnlocked ? "✓" : formatTime(studySeconds)}
+                {studyCompleted ? "✓" : formatTime(studySeconds)}
               </span>
             </div>
 
@@ -1102,9 +1296,9 @@ Rules:
             </div>
 
             <div className="mini-focus-text">
-              {studyUnlocked
-                ? "Fun Zone unlocked 🎉"
-                : "30 min to unlock games"}
+              {studyCompleted
+                ? "Recall complete to unlock games 🎉"
+                : "Study 30 min + pass recall"}
             </div>
           </div>
         </div>
@@ -1301,41 +1495,68 @@ Rules:
 
         <div className="home-grid">
           <div className="home-card focus-card">
-            <div className="home-card-icon">⏱</div>
+            <div className="home-card-icon">🧠</div>
 
             <div className="home-card-heading">
-              <h3>Focus Session</h3>
+              <h3>Study Session</h3>
 
               <span className="focus-time">
-                {formatTime(studySeconds)}
+                {studyCompleted ? "✓" : formatTime(studySeconds)}
               </span>
             </div>
 
             <p>
-              {studyUnlocked
-                ? "Your 30-minute focus goal is complete."
-                : "Study for 30 minutes to unlock Fun Zone."}
+              {studyCompleted
+                ? "Session complete. Prove what you remember."
+                : studyRunning
+                ? `Studying ${studySubject}${studyChapter ? ` • ${studyChapter}` : ""}`
+                : "Choose what you're studying, then start your 30-minute session."}
             </p>
+
+            {!studyCompleted && !studyRunning && (
+              <div className="session-fields">
+                <input
+                  value={studySubject}
+                  onChange={(event) => setStudySubject(event.target.value)}
+                  placeholder="Subject e.g. Science"
+                />
+                <input
+                  value={studyChapter}
+                  onChange={(event) => setStudyChapter(event.target.value)}
+                  placeholder="Chapter / topic e.g. Chemical Reactions"
+                />
+              </div>
+            )}
 
             <div className="progress-track large">
               <div
                 className="progress-fill"
                 style={{
-                  width: `${Math.min(
-                    100,
-                    (studySeconds / STUDY_GOAL) * 100
-                  )}%`,
+                  width: `${Math.min(100, (studySeconds / STUDY_GOAL) * 100)}%`,
                 }}
               />
             </div>
 
             <div className="focus-status">
-              {studyUnlocked
-                ? "🔓 Fun Zone unlocked"
-                : `${Math.floor(
-                    studySeconds / 60
-                  )} / 30 minutes`}
+              {studyCompleted
+                ? "🧠 Recall check ready"
+                : `${Math.floor(studySeconds / 60)} / 30 minutes`}
             </div>
+
+            {!studyCompleted && (
+              <button
+                className="primary-button session-button"
+                onClick={studyRunning ? pauseStudySession : startStudySession}
+              >
+                {studyRunning ? "⏸ Pause Session" : studySeconds > 0 ? "▶ Resume Session" : "▶ Start Study Session"}
+              </button>
+            )}
+
+            {!studyCompleted && studySeconds > 0 && !studyRunning && (
+              <button className="text-button" onClick={resetStudySession}>
+                Reset session
+              </button>
+            )}
           </div>
 
           <div className="home-card">
@@ -2416,8 +2637,9 @@ Rules:
       100,
       (studySeconds / STUDY_GOAL) * 100
     );
+    const gamesUnlocked = studyCompleted && recallPassed;
 
-    if (!studyUnlocked) {
+    if (!gamesUnlocked) {
       return (
         <section className="page-section">
           {renderHeader(
@@ -2435,12 +2657,12 @@ Rules:
             <h2>
               Study first.
               <br />
-              <span>Then play.</span>
+              <span>Then remember. Then play.</span>
             </h2>
 
             <p>
-              Complete a 30-minute focus session to
-              unlock the Fun Zone.
+              Complete a 30-minute study session and pass
+              one quick recall question to unlock the Fun Zone.
             </p>
 
             <div className="unlock-progress">
@@ -2466,6 +2688,64 @@ Rules:
               </span>
             </div>
 
+            {studyCompleted && (
+              <div className="recall-panel">
+                <div className="recall-header">
+                  <span>🧠</span>
+                  <div>
+                    <strong>Quick Recall</strong>
+                    <p>One question from your study session.</p>
+                  </div>
+                </div>
+
+                {!recallQuestion && !recallLoading && (
+                  <button className="primary-button" onClick={generateRecallQuestion}>
+                    ✦ Test my memory
+                  </button>
+                )}
+
+                {recallLoading && (
+                  <div className="empty-output">Creating your recall question...</div>
+                )}
+
+                {recallQuestion && (
+                  <div className="recall-question">
+                    <h3>{recallQuestion.question}</h3>
+                    <div className="recall-options">
+                      {recallQuestion.options.map((option) => (
+                        <button
+                          key={option}
+                          className={`recall-option ${
+                            recallSelected
+                              ? option === recallQuestion.answer
+                                ? "recall-correct"
+                                : option === recallSelected
+                                ? "recall-wrong"
+                                : ""
+                              : ""
+                          }`}
+                          onClick={() => chooseRecallAnswer(option)}
+                          disabled={Boolean(recallSelected)}
+                        >
+                          {option}
+                        </button>
+                      ))}
+                    </div>
+                    {recallExplanation && (
+                      <div className={`recall-feedback ${recallPassed ? "success" : "error"}`}>
+                        {recallPassed ? "✅ " : "💡 "}{recallExplanation}
+                      </div>
+                    )}
+                    {!recallPassed && recallSelected && (
+                      <button className="text-button" onClick={generateRecallQuestion}>
+                        Try another question →
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
             <button
               className="secondary-button"
               onClick={() => navigate("home")}
@@ -2490,8 +2770,7 @@ Rules:
           <div>
             <strong>Fun Zone unlocked!</strong>
             <p>
-              Nice work completing your 30-minute focus
-              session.
+              Nice work. You completed 30 minutes and passed your recall check.
             </p>
           </div>
         </div>
@@ -2726,12 +3005,35 @@ Rules:
                   "studyone_study_seconds"
                 );
                 localStorage.removeItem(
+                  "studyone_study_running"
+                );
+                localStorage.removeItem(
+                  "studyone_study_subject"
+                );
+                localStorage.removeItem(
+                  "studyone_study_chapter"
+                );
+                localStorage.removeItem(
+                  "studyone_study_completed"
+                );
+                localStorage.removeItem(
+                  "studyone_recall_passed"
+                );
+                localStorage.removeItem(
                   "studyone_chat"
                 );
 
                 setMistakes([]);
                 setQuizHistory([]);
                 setStudySeconds(0);
+                setStudyRunning(false);
+                setStudySubject("");
+                setStudyChapter("");
+                setStudyCompleted(false);
+                setRecallQuestion(null);
+                setRecallSelected("");
+                setRecallPassed(false);
+                setRecallExplanation("");
                 setChatMessages([]);
               }}
             >
@@ -4751,6 +5053,112 @@ Rules:
             padding: 18px;
           }
         }
+
+        .session-fields {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 9px;
+          margin: 12px 0;
+        }
+
+        .session-fields input {
+          width: 100%;
+          min-width: 0;
+          padding: 11px 12px;
+          border-radius: 11px;
+          border: 1px solid rgba(255, 255, 255, 0.09);
+          background: rgba(255, 255, 255, 0.035);
+          color: inherit;
+          outline: none;
+        }
+
+        .session-button {
+          width: 100%;
+          margin-top: 12px;
+        }
+
+        .recall-panel {
+          width: 100%;
+          margin: 18px 0;
+          padding: 18px;
+          border: 1px solid rgba(124, 58, 237, 0.22);
+          border-radius: 16px;
+          background: rgba(124, 58, 237, 0.06);
+        }
+
+        .recall-header {
+          display: flex;
+          gap: 12px;
+          align-items: center;
+          margin-bottom: 16px;
+        }
+
+        .recall-header > span {
+          font-size: 27px;
+        }
+
+        .recall-header p {
+          margin: 3px 0 0;
+          opacity: 0.68;
+          font-size: 13px;
+        }
+
+        .recall-question h3 {
+          margin: 0 0 14px;
+          line-height: 1.5;
+        }
+
+        .recall-options {
+          display: grid;
+          gap: 9px;
+        }
+
+        .recall-option {
+          text-align: left;
+          padding: 12px 14px;
+          border-radius: 11px;
+          border: 1px solid rgba(255, 255, 255, 0.08);
+          background: rgba(255, 255, 255, 0.035);
+          color: inherit;
+        }
+
+        .recall-option:disabled {
+          cursor: default;
+          opacity: 0.92;
+        }
+
+        .recall-correct {
+          border-color: rgba(74, 222, 128, 0.5);
+          background: rgba(74, 222, 128, 0.09);
+        }
+
+        .recall-wrong {
+          border-color: rgba(248, 113, 113, 0.5);
+          background: rgba(248, 113, 113, 0.09);
+        }
+
+        .recall-feedback {
+          margin-top: 13px;
+          padding: 12px;
+          border-radius: 11px;
+          line-height: 1.5;
+          font-size: 14px;
+        }
+
+        .recall-feedback.success {
+          background: rgba(74, 222, 128, 0.08);
+        }
+
+        .recall-feedback.error {
+          background: rgba(248, 113, 113, 0.08);
+        }
+
+        @media (max-width: 720px) {
+          .session-fields {
+            grid-template-columns: 1fr;
+          }
+        }
+
       `}</style>
 
       <div className="app">

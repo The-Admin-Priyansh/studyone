@@ -13,13 +13,20 @@ type QuizQuestion = {
   explanation: string;
 };
 
+type RecallQuestion = {
+  question: string;
+  options: string[];
+  answer: string;
+  explanation: string;
+};
+
 export async function POST(request: Request) {
   try {
     const contentType = request.headers.get("content-type") || "";
 
-    // =====================================================
+    // =========================================================
     // PDF NOTES
-    // =====================================================
+    // =========================================================
 
     if (contentType.includes("multipart/form-data")) {
       const formData = await request.formData();
@@ -85,6 +92,7 @@ export async function POST(request: Request) {
         );
       }
 
+      // Prevent sending an excessively large prompt to the model.
       const limitedText = pdfText.slice(0, 50000);
 
       const completion = await groq.chat.completions.create({
@@ -114,8 +122,11 @@ IMPORTANT RULES:
 12. Do not use HTML.
 13. Do not make up missing information.
 14. If something is unclear or missing, say so instead of guessing.
+15. Do NOT use markdown tables.
+16. Prefer headings, bullets and short sections.
             `.trim(),
           },
+
           {
             role: "user",
             content: `
@@ -134,6 +145,10 @@ ${limitedText}
 ================ PDF END ==================
 
 Now create the study notes.
+
+Remember:
+Use only the information contained in the PDF.
+Do not add outside facts.
             `.trim(),
           },
         ],
@@ -149,15 +164,251 @@ Now create the study notes.
       });
     }
 
-    // =====================================================
+    // =========================================================
     // NORMAL JSON REQUEST
-    // =====================================================
+    // =========================================================
 
     const body = await request.json();
 
-    // =====================================================
-    // QUIZ
-    // =====================================================
+    // =========================================================
+    // STUDY SESSION RECALL
+    // =========================================================
+
+    if (body?.mode === "recall") {
+      const className =
+        typeof body.className === "string"
+          ? body.className
+          : "Class 10";
+
+      const board =
+        typeof body.board === "string"
+          ? body.board
+          : "MP Board";
+
+      const subject =
+        typeof body.subject === "string"
+          ? body.subject.trim()
+          : "";
+
+      const chapter =
+        typeof body.chapter === "string"
+          ? body.chapter.trim()
+          : "";
+
+      const topic =
+        typeof body.topic === "string"
+          ? body.topic.trim()
+          : "";
+
+      if (!subject) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: "Please provide a subject.",
+          },
+          { status: 400 }
+        );
+      }
+
+      if (!chapter && !topic) {
+        return NextResponse.json(
+          {
+            success: false,
+            error:
+              "Please provide the chapter or topic studied during the session.",
+          },
+          { status: 400 }
+        );
+      }
+
+      const recallPrompt = `
+Create ONE multiple-choice recall question for a student
+who has just completed a focused study session.
+
+Student details:
+
+Class:
+${className}
+
+Board:
+${board}
+
+Subject:
+${subject}
+
+Chapter:
+${chapter || "Not specified"}
+
+Topic:
+${topic || "Not specified"}
+
+The question MUST be based only on the subject/chapter/topic
+provided above.
+
+PURPOSE:
+
+This is not a normal random quiz.
+
+This is a quick memory check immediately after studying.
+
+The question should test whether the student remembers
+something important from the studied topic.
+
+RULES:
+
+- Create exactly 1 question.
+- Exactly 4 options.
+- Exactly ONE correct answer.
+- Suitable for ${className}.
+- Keep it concise.
+- Prefer an important concept, definition, formula, fact,
+  reaction, process or basic application depending on the subject.
+- Do not make the question unnecessarily tricky.
+- Do not invent a specific textbook chapter name.
+- Do not use markdown.
+- Return ONLY valid JSON.
+
+Return exactly:
+
+{
+  "question": "Question text",
+  "options": [
+    "Option A",
+    "Option B",
+    "Option C",
+    "Option D"
+  ],
+  "answer": "Exactly the correct option text",
+  "explanation": "Short explanation"
+}
+
+Before returning:
+
+- Ensure there is exactly 1 question.
+- Ensure there are exactly 4 options.
+- Ensure answer exactly matches one option.
+- Ensure explanation is short.
+      `.trim();
+
+      const completion = await groq.chat.completions.create({
+        model: "openai/gpt-oss-20b",
+
+        messages: [
+          {
+            role: "system",
+            content:
+              "You are StudyOne's strict study-session recall generator. Return valid JSON only.",
+          },
+          {
+            role: "user",
+            content: recallPrompt,
+          },
+        ],
+
+        temperature: 0.2,
+
+        response_format: {
+          type: "json_object",
+        },
+      });
+
+      const rawAnswer =
+        completion.choices[0]?.message?.content?.trim();
+
+      console.log("RECALL RAW RESPONSE:");
+      console.log(rawAnswer);
+
+      if (!rawAnswer) {
+        return NextResponse.json(
+          {
+            success: false,
+            error:
+              "The AI returned an empty recall question.",
+          },
+          { status: 500 }
+        );
+      }
+
+      let parsed: unknown;
+
+      try {
+        parsed = JSON.parse(rawAnswer);
+      } catch (parseError) {
+        console.error("RECALL JSON PARSE ERROR:");
+        console.error(parseError);
+
+        return NextResponse.json(
+          {
+            success: false,
+            error:
+              "The AI returned invalid recall question data.",
+          },
+          { status: 500 }
+        );
+      }
+
+      if (
+        typeof parsed !== "object" ||
+        parsed === null
+      ) {
+        return NextResponse.json(
+          {
+            success: false,
+            error:
+              "The AI returned an invalid recall question.",
+          },
+          { status: 500 }
+        );
+      }
+
+      const recall =
+        parsed as Partial<RecallQuestion>;
+
+      if (
+        typeof recall.question !== "string" ||
+        !Array.isArray(recall.options) ||
+        recall.options.length !== 4 ||
+        !recall.options.every(
+          (option) => typeof option === "string"
+        ) ||
+        typeof recall.answer !== "string" ||
+        typeof recall.explanation !== "string"
+      ) {
+        return NextResponse.json(
+          {
+            success: false,
+            error:
+              "The AI generated an incomplete recall question.",
+          },
+          { status: 500 }
+        );
+      }
+
+      if (!recall.options.includes(recall.answer)) {
+        return NextResponse.json(
+          {
+            success: false,
+            error:
+              "The AI generated an invalid recall answer.",
+          },
+          { status: 500 }
+        );
+      }
+
+      return NextResponse.json({
+        success: true,
+        question: {
+          question: recall.question,
+          options: recall.options,
+          answer: recall.answer,
+          explanation: recall.explanation,
+        },
+      });
+    }
+
+    // =========================================================
+    // AI QUIZ
+    // =========================================================
 
     if (body?.mode === "quiz") {
       const className =
@@ -197,10 +448,6 @@ Now create the study notes.
         );
       }
 
-      // =====================================================
-      // PREVIOUS MISTAKES
-      // =====================================================
-
       const mistakesText = mistakes
         .slice(-10)
         .map(
@@ -230,16 +477,16 @@ ${mistake.explanation || ""}
         )
         .join("\n");
 
-      // =====================================================
-      // QUIZ PROMPT
-      // =====================================================
-
       const quizPrompt = `
 Create exactly 5 multiple-choice questions for StudyOne.
 
 Student:
-Class: ${className}
-Board: ${board}
+
+Class:
+${className}
+
+Board:
+${board}
 
 Subject:
 ${subject}
@@ -258,13 +505,13 @@ The student previously made these mistakes:
 
 ${mistakesText}
 
-Create NEW questions that test the same concepts the student
-struggled with.
+Create NEW questions that test the same concepts
+the student struggled with.
 
 Do NOT simply copy the previous questions.
 
-The goal is to help the student understand and improve their
-weak areas.
+The goal is to help the student understand and improve
+their weak areas.
 `
     : ""
 }
@@ -281,6 +528,7 @@ IMPORTANT RULES:
 - Do not invent a specific textbook chapter name.
 - Keep explanations short and clear.
 - Do not use markdown.
+- Do not use markdown tables.
 - Return ONLY valid JSON.
 - Do not put JSON inside markdown code fences.
 
@@ -311,7 +559,7 @@ Before returning the JSON, check:
 - Every object has answer.
 - Every answer exactly matches one option.
 - Every object has explanation.
-`;
+      `.trim();
 
       const completion = await groq.chat.completions.create({
         model: "openai/gpt-oss-20b",
@@ -345,15 +593,12 @@ Before returning the JSON, check:
         return NextResponse.json(
           {
             success: false,
-            error: "The AI returned an empty quiz.",
+            error:
+              "The AI returned an empty quiz.",
           },
           { status: 500 }
         );
       }
-
-      // =====================================================
-      // PARSE JSON
-      // =====================================================
 
       let parsed: unknown;
 
@@ -362,7 +607,6 @@ Before returning the JSON, check:
       } catch (parseError) {
         console.error("QUIZ JSON PARSE ERROR:");
         console.error(parseError);
-
         console.error("RAW AI RESPONSE:");
         console.error(rawAnswer);
 
@@ -375,10 +619,6 @@ Before returning the JSON, check:
           { status: 500 }
         );
       }
-
-      // =====================================================
-      // GET QUESTIONS
-      // =====================================================
 
       let questions: unknown = null;
 
@@ -411,10 +651,6 @@ Before returning the JSON, check:
         );
       }
 
-      // =====================================================
-      // VALIDATE QUESTIONS
-      // =====================================================
-
       const validQuestions: QuizQuestion[] = [];
 
       for (const item of questions) {
@@ -430,8 +666,7 @@ Before returning the JSON, check:
           !Array.isArray(question.options) ||
           question.options.length !== 4 ||
           !question.options.every(
-            (option) =>
-              typeof option === "string"
+            (option) => typeof option === "string"
           ) ||
           typeof question.answer !== "string" ||
           typeof question.explanation !== "string"
@@ -461,11 +696,7 @@ Before returning the JSON, check:
         );
 
         console.error(
-          JSON.stringify(
-            parsed,
-            null,
-            2
-          )
+          JSON.stringify(parsed, null, 2)
         );
 
         return NextResponse.json(
@@ -484,9 +715,9 @@ Before returning the JSON, check:
       });
     }
 
-    // =====================================================
+    // =========================================================
     // NORMAL AI ASSISTANT / PLANNER
-    // =====================================================
+    // =========================================================
 
     const prompt = body?.prompt;
 
@@ -504,19 +735,19 @@ Before returning the JSON, check:
       );
     }
 
-    const completion =
-      await groq.chat.completions.create({
-        model: "openai/gpt-oss-20b",
+    const completion = await groq.chat.completions.create({
+      model: "openai/gpt-oss-20b",
 
-        messages: [
-          {
-            role: "system",
-            content: `
+      messages: [
+        {
+          role: "system",
+          content: `
 You are StudyOne AI, a helpful study planner and study assistant for school students.
 
 Give simple, practical and well-organized answers.
 
 For study plans:
+
 - Respect the student's class.
 - Respect the student's board.
 - Respect the exam date.
@@ -525,14 +756,27 @@ For study plans:
 - Do not invent syllabus topics unless the student provides them.
 - Make the plan realistic.
 - Prioritize revision and practice as the exam gets closer.
-            `.trim(),
-          },
-          {
-            role: "user",
-            content: prompt,
-          },
-        ],
-      });
+
+Formatting rules:
+
+- Do NOT use markdown tables.
+- Never output structures like:
+  | Time | Activity | Purpose |
+- Instead use headings, bullets, cards-style sections
+  and short paragraphs.
+- Keep answers easy to scan.
+- Use emojis where they improve clarity.
+- Use short sections.
+- Do not over-explain simple questions.
+          `.trim(),
+        },
+
+        {
+          role: "user",
+          content: prompt,
+        },
+      ],
+    });
 
     const answer =
       completion.choices[0]?.message?.content ||
@@ -543,10 +787,19 @@ For study plans:
       answer,
     });
   } catch (error) {
-    console.error("=================================");
-    console.error("STUDYONE AI ERROR:");
+    console.error(
+      "================================="
+    );
+
+    console.error(
+      "STUDYONE AI ERROR:"
+    );
+
     console.error(error);
-    console.error("=================================");
+
+    console.error(
+      "================================="
+    );
 
     let errorMessage =
       "Unknown AI service error.";
